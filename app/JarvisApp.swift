@@ -50,6 +50,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    // Voltou pra janela (Dock, ⌘Tab, clique): o teclado vai direto pra esfera, pro espaço funcionar.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        janela?.makeFirstResponder(web)
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         encerrando = true
         guard let p = servidor, p.isRunning else { return }
@@ -71,20 +76,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
 
         janela = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 760),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
         janela.title = "JARVIS"
+        // Barra preta no topo, fora da página: é por ela que se arrasta a janela.
         janela.titlebarAppearsTransparent = true
         janela.titleVisibility = .hidden
         janela.backgroundColor = .black
+        janela.toolbar = NSToolbar(identifier: "barra")
+        janela.toolbarStyle = .unifiedCompact
+        janela.titlebarSeparatorStyle = .none
         janela.appearance = NSAppearance(named: .darkAqua)
         janela.minSize = NSSize(width: 480, height: 360)
         janela.collectionBehavior = [.fullScreenPrimary]
         janela.isReleasedWhenClosed = false
         janela.contentView = web
+        janela.initialFirstResponder = web
         janela.center()
         janela.setFrameAutosaveName("JarvisJanela")
         janela.makeKeyAndOrderFront(nil)
+        janela.makeFirstResponder(web)
         NSApp.activate(ignoringOtherApps: true)
     }
 

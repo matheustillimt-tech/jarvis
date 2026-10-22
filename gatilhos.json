@@ -1,0 +1,13 @@
+[
+  {
+    "nome": "mercado",
+    "palavras": ["dólar", "dolar", "bolsa", "ibovespa", "mercado", "bitcoin", "euro", "nasdaq", "cotação"],
+    "comando": ["mercado.py"]
+  },
+  {
+    "nome": "instagram",
+    "palavras": ["instagram", "post", "posts", "comentário", "comentários", "comentario", "comentarios", "visualizações", "views", "seguidores", "alcance"],
+    "comando": ["redes_resumo.py"],
+    "periodo": true
+  }
+]

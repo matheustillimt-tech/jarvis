@@ -58,10 +58,18 @@ Abre no navegador em `http://localhost:8790`. Na primeira vez, libere o microfon
 
 | Tecla | O que faz |
 |---|---|
-| Segurar **espaço** (ou segurar o clique na esfera) | Fala com ele |
+| Segurar **espaço** | Fala com ele. Apertar de novo enquanto ele fala ou pensa **interrompe** na hora |
 | **T** | Digita em vez de falar |
 | **N** | Começa uma conversa nova |
 | **H** | Mostra ou esconde os detalhes (o que você falou, a resposta escrita, o que ele está usando). Por padrão a tela fica só com a esfera |
+
+Clique na janela não liga o microfone: só a barra de espaço. A gravação para sozinha em 30 segundos e também quando você troca de janela. Se você apertar o espaço com ele no meio de uma resposta, ele cala e cancela o que estava fazendo, sem perder o fio da conversa.
+
+### Configurações (a engrenagem)
+
+Mexa o mouse e aparece uma engrenagem no canto de cima. Nela você escolhe a voz do JARVIS (8 vozes em português, 4 masculinas e 4 femininas, com botão pra ouvir cada uma) e a velocidade da fala. Vale a partir da próxima resposta e fica salvo em `.estado/preferencias.json`, que vale mais que o `.env`.
+
+A lista de vozes fica em `vozes.json`: troque ou adicione qualquer voz da Voice Library do ElevenLabs (o ID e uma descrição curta). Algumas vozes da biblioteca só funcionam depois de clicar em **Add to my voices** no site.
 
 ## App de Mac (opcional)
 
@@ -88,24 +96,31 @@ Quando a trava barra, ele diz o que vai fazer e pergunta "Confirma?". Só depois
 
 ## Atalhos
 
-Pergunta que se repete fica mais rápida com um script que já devolve a resposta pronta. A pasta `atalhos/` tem dois exemplos que usam a Zernio:
+Pergunta que se repete fica mais rápida com um script que já devolve a resposta pronta, numa linha só. A pasta `atalhos/` tem três exemplos:
 
-- `redes_resumo.py`: um dia (`--dia ontem`) ou um período inteiro (`--de 2026-10-01 --ate 2026-10-21`) no Instagram, TikTok ou YouTube, numa linha só (posts, views, alcance, comentários, seguidores, melhor post).
-- `isca_resumo.py`: quantas pessoas comentaram a palavra e pediram a isca no direct, quantas receberam o link, quantas clicaram e qual isca puxou mais.
-
-Atalho lento pode rodar quando o JARVIS abre: coloque em `JARVIS_AQUECER_ATALHOS` (ex.: `isca_resumo.py --dia ontem`) e o resultado de ontem fica guardado pra resposta sair na hora.
+- `mercado.py`: dólar, euro, bitcoin, Ibovespa, S&P 500 e Nasdaq com a variação do dia (fontes grátis, sem chave).
+- `redes_resumo.py` (precisa da Zernio): Instagram, TikTok ou YouTube num dia (`--dia ontem`), na semana (`--ultimos 7`) ou num período (`--de 2026-10-01 --ate 2026-10-21`): posts, views, alcance, comentários, seguidores, o melhor post e o mais comentado.
+- `isca_resumo.py` (precisa da Zernio): quantas pessoas comentaram a palavra e pediram a isca no direct, quantas receberam o link, quantas clicaram e qual isca puxou mais.
 
 Crie os seus e conte no `persona.md` quando usar cada um. Diga também que período se pede numa chamada só: sem isso, o modelo tende a chamar o atalho dia por dia (uma pergunta de 21 dias levou 31 s assim e 3 s numa chamada).
 
+Atalho lento pode rodar quando o JARVIS abre: coloque em `JARVIS_AQUECER_ATALHOS` (ex.: `isca_resumo.py --dia ontem`) e o resultado de ontem fica guardado.
+
+### Pré-busca (gatilhos.json)
+
+Pra pergunta que você já sabe que vai fazer, o JARVIS nem precisa decidir rodar o atalho: em `gatilhos.json`, cada palavra aponta pra um atalho ("dólar", "bolsa" → `mercado.py`; "posts", "comentários" → `redes_resumo.py`, com o período que você falou: hoje, ontem, semana ou mês). O servidor roda o atalho na hora e manda o dado junto com a pergunta, e o Claude só precisa responder. Corta a ida e volta da ferramenta.
+
 ## Velocidade
 
-Quando a pergunta exige buscar alguma coisa, ele fala um aviso curto em 1 a 3 segundos e a resposta chega em 4 a 8. O aviso vem do próprio Claude; se ele for direto trabalhar sem avisar, o JARVIS toca uma frase pronta ("Deixa comigo, Senhor."), gravada quando o app abre. A resposta é falada assim que o texto fica pronto, sem esperar o Claude fechar a rodada. O que mais ajuda:
+Pergunta simples sai em 1 a 2 segundos. Pergunta que precisa de dado sai em 3 a 6. Se uma busca demorar, ele avisa ("Um instante, Senhor.") e volta com o resultado; pergunta simples não tem aviso. A resposta é falada assim que o texto fica pronto, sem esperar o Claude fechar a rodada. O que mais ajuda:
 
+- **Contexto enxuto (`JARVIS_CONTEXTO=leve`, o padrão).** O Claude abre numa pasta vazia com a sua pasta anexada, então não carrega o CLAUDE.md e a memória dela a cada pergunta. Medido: resposta simples em ~1 s, contra 2 a 6 s abrindo direto num vault grande. Use `completo` só com pasta pequena (como uma pasta só pra gravar um vídeo, com um CLAUDE.md curto dizendo o que ele vai responder).
+- Atalhos e pré-busca pras perguntas frequentes.
 - `JARVIS_MODELO=sonnet` e `JARVIS_ESFORCO=low` (o padrão).
-- Atalhos pras perguntas frequentes.
-- Bloquear conectores que ele não usa em `JARVIS_BLOQUEAR_FERRAMENTAS` (menos coisa pra carregar).
+- Bloquear conectores que ele não usa em `JARVIS_BLOQUEAR_FERRAMENTAS`.
 - `JARVIS_MODELO_VOZ=eleven_flash_v2_5` começa a falar cerca de 1 segundo antes, com voz um pouco pior.
-- `JARVIS_VELOCIDADE_VOZ=1.1` deixa a fala 10% mais rápida (vai de 0.7 a 1.2).
+- `JARVIS_VELOCIDADE_VOZ=1.1` deixa a fala 10% mais rápida (vai de 0.7 a 1.2), ou ajuste na engrenagem.
+- `JARVIS_PERSONA` escolhe outro arquivo de persona (ex.: um modo só pra gravar vídeo).
 
 ## Custos
 
@@ -123,6 +138,8 @@ hooks/trava.py       a trava de confirmação
 web/index.html       a tela da esfera
 app/                 o app de Mac (montar.sh compila e instala)
 persona.example.md   instruções do assistente (copie pra persona.md)
+vozes.json           as vozes que aparecem na engrenagem
+gatilhos.json        palavras que já disparam um atalho (pré-busca)
 atalhos/             scripts de resposta rápida
 .estado/             log de cada pedido, com os tempos (não vai pro git)
 ```

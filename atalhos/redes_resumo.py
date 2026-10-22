@@ -6,6 +6,7 @@ Uso:
   python3 atalhos/redes_resumo.py --dia hoje
   python3 atalhos/redes_resumo.py --dia 2026-10-21 --plataforma tiktok
   python3 atalhos/redes_resumo.py --de 2026-10-01 --ate 2026-10-21 # período inteiro, uma chamada
+  python3 atalhos/redes_resumo.py --ultimos 7                      # a semana (hoje e os 6 dias antes)
 
 Precisa do zernio.py da skill publicar-agendar-posts (caminho em JARVIS_ZERNIO).
 """
@@ -68,12 +69,15 @@ def main():
     ap.add_argument("--dia", default="ontem", help="hoje | ontem | AAAA-MM-DD")
     ap.add_argument("--de", help="início do período (AAAA-MM-DD, hoje ou ontem)")
     ap.add_argument("--ate", help="fim do período (AAAA-MM-DD, hoje ou ontem). Padrão: hoje")
+    ap.add_argument("--ultimos", type=int, help="os últimos N dias, contando hoje (ex.: 7 = semana)")
     ap.add_argument("--plataforma", default="instagram")
     args = ap.parse_args()
 
     fuso = ZoneInfo(FUSO) if ZoneInfo else dt.timezone(dt.timedelta(hours=-3))
     hoje = dt.datetime.now(fuso).date()
-    if args.de or args.ate:
+    if args.ultimos:
+        inicio, fim = hoje - dt.timedelta(days=args.ultimos - 1), hoje
+    elif args.de or args.ate:
         inicio = data(args.de, hoje) if args.de else data(args.ate, hoje)
         fim = data(args.ate, hoje) if args.ate else hoje
         if fim < inicio:
@@ -127,6 +131,10 @@ def main():
         )
 
     linha += f" | melhor post: {num((melhor.get('analytics') or {}).get('views'))} views em {melhor['_dia']}, \"{titulo}\""
+    comentado = max(posts, key=lambda p: num((p.get("analytics") or {}).get("comments")))
+    tema_comentado = " ".join((comentado.get("content") or "").split())[:110]
+    linha += (f" | mais comentado: {num((comentado.get('analytics') or {}).get('comments'))} comentários em "
+              f"{comentado['_dia']}, \"{tema_comentado}\"")
     print(linha)
 
 

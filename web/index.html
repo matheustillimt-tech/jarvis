@@ -20,7 +20,7 @@
     font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
     overflow: hidden; -webkit-font-smoothing: antialiased; user-select: none;
   }
-  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: pointer; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: default; }
 
   .topo {
     position: fixed; top: 28px; left: 32px; right: 32px; display: flex; justify-content: space-between;
@@ -75,6 +75,62 @@
   }
   body.digitando #caixa { display: block; }
 
+  /* Engrenagem: aparece só quando o mouse mexe (não atrapalha a gravação). */
+  .engrenagem {
+    position: fixed; top: 14px; right: 14px; z-index: 5; width: 40px; height: 40px; border: 0; border-radius: 999px;
+    background: transparent; color: rgba(255, 255, 255, .5); cursor: pointer; display: grid; place-items: center;
+    opacity: 0; transition: opacity .4s, background .2s, color .2s, transform .4s;
+  }
+  body.mouse .engrenagem, .engrenagem:focus-visible { opacity: 1; }
+  .engrenagem:hover { color: #fff; background: rgba(255, 255, 255, .08); transform: rotate(30deg); }
+
+  .config {
+    position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, .6); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  }
+  .config[hidden] { display: none; }
+  .config-caixa {
+    width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; box-sizing: border-box;
+    background: #0b0b0b; border: 1px solid rgba(255, 255, 255, .12); border-radius: 18px; padding: 20px;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, .6); user-select: none;
+    scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .15) transparent;
+  }
+  .config-caixa::-webkit-scrollbar { width: 8px; height: 0; }
+  .config-caixa::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .15); border-radius: 8px; }
+  .config-caixa::-webkit-scrollbar-track { background: transparent; }
+  .config-topo { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+  .config-titulo { font-size: 13px; letter-spacing: .28em; text-transform: uppercase; font-weight: 600; }
+  .config-fechar {
+    width: 32px; height: 32px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, .06);
+    color: var(--suave); font-size: 18px; cursor: pointer; line-height: 1;
+  }
+  .config-fechar:hover { color: #fff; background: rgba(255, 255, 255, .12); }
+  .config-secao {
+    display: flex; justify-content: space-between; margin: 18px 0 10px; font-size: 11px; letter-spacing: .22em;
+    text-transform: uppercase; color: var(--suave);
+  }
+  .config-secao:first-of-type { margin-top: 0; }
+  .grupo-voz { font-size: 11px; color: var(--fraco); margin: 12px 0 6px; letter-spacing: .08em; text-transform: uppercase; }
+  .voz {
+    display: grid; grid-template-columns: 16px 1fr auto; gap: 12px; align-items: center; width: 100%; box-sizing: border-box;
+    padding: 11px 12px; margin-bottom: 6px; border: 1px solid rgba(255, 255, 255, .08); border-radius: 12px;
+    background: rgba(255, 255, 255, .02); color: var(--texto); font: inherit; text-align: left; cursor: pointer;
+    transition: border-color .2s, background .2s;
+  }
+  .voz:hover { background: rgba(255, 255, 255, .05); }
+  .voz.ativa { border-color: rgba(255, 255, 255, .7); background: rgba(255, 255, 255, .06); }
+  .voz .marca-voz { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid rgba(255, 255, 255, .45); box-sizing: border-box; }
+  .voz.ativa .marca-voz { background: #fff; border-color: #fff; box-shadow: 0 0 10px rgba(255, 255, 255, .6); }
+  .voz-nome { font-size: 15px; font-weight: 500; }
+  .voz-desc { font-size: 12px; color: var(--suave); margin-top: 2px; }
+  .ouvir {
+    font: inherit; font-size: 12px; padding: 6px 12px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, .2);
+    background: transparent; color: var(--texto); cursor: pointer;
+  }
+  .ouvir:hover { background: rgba(255, 255, 255, .1); }
+  .velocidade { width: 100%; accent-color: #fff; }
+  .config-nota { margin-top: 14px; font-size: 12px; color: var(--fraco); }
+
   @keyframes pisca { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
   @keyframes entra { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
   @media (max-width: 600px) {
@@ -84,11 +140,29 @@
 </style>
 </head>
 <body data-estado="iniciando">
-<canvas id="esfera" aria-label="Esfera do JARVIS. Segure para falar."></canvas>
+<canvas id="esfera" aria-label="Esfera do JARVIS. Segure a barra de espaço para falar."></canvas>
 
 <div class="topo">
   <span class="marca">Jarvis</span>
   <span class="estado"><span class="ponto"></span><span id="estadoTexto">iniciando</span></span>
+</div>
+
+<button id="engrenagem" class="engrenagem" aria-label="Configurações" title="Configurações">
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+</button>
+
+<div id="config" class="config" hidden>
+  <div class="config-caixa" role="dialog" aria-modal="true" aria-label="Configurações">
+    <div class="config-topo">
+      <span class="config-titulo">Configurações</span>
+      <button id="fecharConfig" class="config-fechar" aria-label="Fechar">×</button>
+    </div>
+    <div class="config-secao"><span>Voz do Jarvis</span></div>
+    <div id="listaVozes"></div>
+    <div class="config-secao"><span>Velocidade da fala</span><span id="velValor"></span></div>
+    <input id="velocidade" class="velocidade" type="range" min="0.8" max="1.2" step="0.05" aria-label="Velocidade da fala">
+    <div class="config-nota">Toque numa voz pra ouvir e escolher. Vale a partir da próxima resposta.</div>
+  </div>
 </div>
 
 <div id="caixa"><input id="entrada" type="text" placeholder="Digite e aperte Enter" autocomplete="off"></div>
@@ -303,9 +377,22 @@
 
   let micStream = null, gravador = null, pedacos = [], gravando = false, inicioGravacao = 0;
   let picoGravacao = 0, medidor = null;
+  let querGravar = false, limiteGravacao = null;
+  const MAX_GRAVACAO = 30000;  // 30 s: depois disso para sozinho
+
+  // Espaço a qualquer momento: se ele estiver falando, cala; se estiver trabalhando, cancela o pedido.
+  function interromper() {
+    const ocupado = ["transcrevendo", "pensando"].includes(estado) || turnoAberto;
+    pararFala();
+    turnoAberto = false;
+    return ocupado ? fetch("/api/interromper", { method: "POST" }).catch(() => {}) : Promise.resolve();
+  }
 
   async function comecarGravacao() {
-    if (gravando || trabalhando()) return;
+    if (gravando || querGravar) return;
+    if (["aquecendo", "iniciando"].includes(estado)) { avisar("Um momento, Senhor. Ainda estou ligando."); return; }
+    interromper();
+    querGravar = true;
     corpo.classList.add("usado");
     try {
       await prepararAudio();
@@ -318,9 +405,11 @@
         audioCtx.createMediaStreamSource(micStream).connect(analisadorMic);
       }
     } catch (erro) {
+      querGravar = false;
       avisar("Sem acesso ao microfone. Libere no navegador ou aperte T pra digitar.");
       return;
     }
+    if (!querGravar) return;  // soltou o espaço antes do microfone abrir
     pararFala();
     pedacos = [];
     picoGravacao = 0;
@@ -334,10 +423,14 @@
     gravador.start();
     gravando = true;
     inicioGravacao = performance.now();
+    clearTimeout(limiteGravacao);
+    limiteGravacao = setTimeout(pararGravacao, MAX_GRAVACAO);
     mudarEstado("ouvindo");
   }
 
   function pararGravacao() {
+    querGravar = false;
+    clearTimeout(limiteGravacao);
     if (!gravando) return;
     gravando = false;
     clearInterval(medidor);
@@ -358,7 +451,8 @@
     novoTurno();
     mudarEstado("transcrevendo");
     try {
-      await fetch("/api/audio", { method: "POST", headers: { "Content-Type": blob.type }, body: blob });
+      const r = await fetch("/api/audio", { method: "POST", headers: { "Content-Type": blob.type }, body: blob });
+      if (r.status === 409) ocupadoNoServidor();
     } catch (erro) {
       avisar("Não consegui falar com o servidor.");
       mudarEstado("parado");
@@ -366,16 +460,32 @@
   }
 
   async function enviarTexto(texto) {
-    if (!texto.trim() || trabalhando()) return;
+    if (!texto.trim()) return;
+    await interromper();
     corpo.classList.add("usado");
     await prepararAudio();
     novoTurno();
     el("voce").textContent = "“" + texto + "”";
     mudarEstado("pensando");
-    await fetch("/api/texto", {
+    const r = await fetch("/api/texto", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ texto }),
     });
+    if (r.status === 409) ocupadoNoServidor();
   }
+
+  function ocupadoNoServidor() {
+    avisar("Um momento, Senhor. Ainda estou no pedido anterior.");
+    mudarEstado("pensando");  // o servidor avisa quando terminar
+  }
+
+  // Se ficar "trabalhando" sem notícia do servidor por 90 s, destrava a tela.
+  let ultimoEvento = performance.now();
+  setInterval(() => {
+    if (["transcrevendo", "pensando"].includes(estado) && !tocando && performance.now() - ultimoEvento > 90000) {
+      mudarEstado("parado");
+      avisar("Perdi o fio, Senhor. Pode repetir?");
+    }
+  }, 5000);
 
   // ---------------------------------------------------------- tela
   let rotulosTurno = new Set();
@@ -410,6 +520,7 @@
   function conectar() {
     const fonte = new EventSource("/api/eventos");
     fonte.onmessage = (ev) => {
+      ultimoEvento = performance.now();
       const e = JSON.parse(ev.data);
       if (e.tipo === "estado") {
         if (tocando && e.estado !== "aquecendo") return;  // deixa a fala terminar
@@ -437,10 +548,99 @@
   }
   conectar();
 
+  // ---------------------------------------------------------- configurações (engrenagem)
+  const painel = el("config");
+  const configAberta = () => !painel.hidden;
+  let config = null;
+  let mouseTimer = null;
+
+  addEventListener("mousemove", () => {
+    corpo.classList.add("mouse");
+    clearTimeout(mouseTimer);
+    mouseTimer = setTimeout(() => corpo.classList.remove("mouse"), 2500);
+  });
+
+  function vel(v) { return Number(v).toFixed(2).replace(/0$/, "").replace(".", ",") + "×"; }
+
+  function desenharVozes() {
+    const lista = el("listaVozes");
+    lista.innerHTML = "";
+    ["masculina", "feminina"].forEach((genero) => {
+      const vozes = config.vozes.filter((v) => v.genero === genero);
+      if (!vozes.length) return;
+      const titulo = document.createElement("div");
+      titulo.className = "grupo-voz";
+      titulo.textContent = genero === "masculina" ? "Masculinas" : "Femininas";
+      lista.appendChild(titulo);
+      vozes.forEach((v) => {
+        const item = document.createElement("div");
+        item.className = "voz" + (v.id === config.voz ? " ativa" : "");
+        item.setAttribute("role", "radio");
+        item.setAttribute("aria-checked", v.id === config.voz ? "true" : "false");
+        item.tabIndex = 0;
+        item.innerHTML = '<span class="marca-voz"></span><span><div class="voz-nome"></div><div class="voz-desc"></div></span>';
+        item.querySelector(".voz-nome").textContent = v.nome;
+        item.querySelector(".voz-desc").textContent = v.descricao;
+        const ouvir = document.createElement("button");
+        ouvir.className = "ouvir";
+        ouvir.textContent = "Ouvir";
+        ouvir.addEventListener("click", (ev) => { ev.stopPropagation(); tocarAmostra(v.id); });
+        item.appendChild(ouvir);
+        item.addEventListener("click", () => escolherVoz(v.id));
+        item.addEventListener("keydown", (ev) => { if (ev.key === "Enter") escolherVoz(v.id); });
+        lista.appendChild(item);
+      });
+    });
+    el("velocidade").value = config.velocidade;
+    el("velValor").textContent = vel(config.velocidade);
+  }
+
+  async function salvarConfig(mudanca) {
+    const r = await fetch("/api/config", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mudanca),
+    });
+    config = await r.json();
+    desenharVozes();
+  }
+
+  function tocarAmostra(id) {
+    pararFala();
+    turnoAberto = false;
+    falar("/api/amostra/" + id + "?v=" + config.velocidade);
+  }
+
+  async function escolherVoz(id) {
+    await salvarConfig({ voz: id });
+    tocarAmostra(id);
+  }
+
+  async function abrirConfig() {
+    await prepararAudio();
+    const r = await fetch("/api/config");
+    config = await r.json();
+    desenharVozes();
+    painel.hidden = false;
+  }
+
+  function fecharConfig() { painel.hidden = true; }
+
+  el("engrenagem").addEventListener("click", abrirConfig);
+  el("fecharConfig").addEventListener("click", fecharConfig);
+  painel.addEventListener("click", (ev) => { if (ev.target === painel) fecharConfig(); });
+  el("velocidade").addEventListener("input", (ev) => { el("velValor").textContent = vel(ev.target.value); });
+  el("velocidade").addEventListener("change", async (ev) => {
+    await salvarConfig({ velocidade: Number(ev.target.value) });
+    tocarAmostra(config.voz);
+  });
+
   // ---------------------------------------------------------- atalhos
   const digitando = () => corpo.classList.contains("digitando");
 
   addEventListener("keydown", (e) => {
+    if (configAberta()) {  // com as configurações abertas, o espaço não grava
+      if (e.key === "Escape") fecharConfig();
+      return;
+    }
     if (digitando()) {
       if (e.key === "Escape") { corpo.classList.remove("digitando"); el("entrada").blur(); }
       return;
@@ -451,7 +651,7 @@
     if (k === "h") corpo.classList.toggle("detalhes");
     if (k === "n") { novoTurno(); fetch("/api/reiniciar", { method: "POST" }); avisar("Conversa nova."); }
   });
-  addEventListener("keyup", (e) => { if (e.code === "Space" && !digitando()) { e.preventDefault(); pararGravacao(); } });
+  addEventListener("keyup", (e) => { if (e.code === "Space" && !digitando() && !configAberta()) { e.preventDefault(); pararGravacao(); } });
 
   el("entrada").addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
@@ -463,9 +663,10 @@
     }
   });
 
-  tela.addEventListener("pointerdown", (e) => { e.preventDefault(); comecarGravacao(); });
-  addEventListener("pointerup", pararGravacao);
-  addEventListener("pointercancel", pararGravacao);
+  // Só o espaço liga o microfone (clique na janela não grava nada).
+  // Se você trocar de janela segurando o espaço, a gravação para.
+  addEventListener("blur", pararGravacao);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) pararGravacao(); });
 })();
 </script>
 </body>

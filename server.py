@@ -25,6 +25,7 @@ import urllib.error
 import urllib.request
 import uuid
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -60,6 +61,10 @@ def carregar_config():
         "porta": int(base.get("JARVIS_PORTA", "8790")),
         "modelo": base.get("JARVIS_MODELO", "sonnet"),
         "esforco": base.get("JARVIS_ESFORCO", "low"),
+        # leve: o Claude abre numa pasta vazia com a sua pasta anexada (responde em ~1 s);
+        # completo: abre direto na sua pasta, carregando o CLAUDE.md e a memória dela (bem mais lento)
+        "contexto": base.get("JARVIS_CONTEXTO", "leve"),
+        "persona": base.get("JARVIS_PERSONA", "persona.md"),
         "eleven_key": base.get("ELEVENLABS_API_KEY", ""),
         "voz": base.get("JARVIS_VOZ", "xHUwLsLfyqiYOIVTzLRW"),
         "modelo_voz": base.get("JARVIS_MODELO_VOZ", "eleven_multilingual_v2"),
@@ -73,10 +78,39 @@ def carregar_config():
 
 
 CFG = carregar_config()
+PREFS = ESTADO / "preferencias.json"  # o que se escolhe na engrenagem vale mais que o .env
+
+
+def carregar_vozes():
+    try:
+        return json.loads((RAIZ / "vozes.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return []
+
+
+def carregar_preferencias():
+    try:
+        p = json.loads(PREFS.read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return
+    if p.get("voz"):
+        CFG["voz"] = p["voz"]
+    if p.get("velocidade"):
+        CFG["velocidade_voz"] = float(p["velocidade"])
+
+
+def salvar_preferencias():
+    ESTADO.mkdir(exist_ok=True)
+    PREFS.write_text(json.dumps({"voz": CFG["voz"], "velocidade": CFG["velocidade_voz"]}), encoding="utf-8")
+
+
+VOZES = carregar_vozes()
+carregar_preferencias()
+AMOSTRA = "Às suas ordens, Senhor. É assim que eu vou falar com o senhor daqui pra frente."
 
 
 def persona():
-    for nome in ("persona.md", "persona.example.md"):
+    for nome in (CFG.get("persona") or "persona.md", "persona.md", "persona.example.md"):
         p = RAIZ / nome
         if p.exists():
             return p.read_text(encoding="utf-8")
@@ -184,8 +218,10 @@ def rotulo_ferramenta(nome, entrada):
 # ------------------------------------------------------------ sessão do Claude
 
 # Vai junto de cada fala: o modelo tende a se alongar quando acha muita coisa.
-LEMBRETE = ("\n\n[modo voz: se for usar ferramenta, primeiro uma frase curta de aviso (até 10 palavras); "
-            "a resposta final em no máximo 2 frases curtas, até 30 palavras, só o essencial. Trate-o por Senhor.]")
+LEMBRETE = ("\n\n[modo voz: pergunta simples (conversa, confirmação, algo que você já sabe) = responda direto, "
+            "sem aviso e sem ferramenta. Só se precisar de ferramenta, comece com uma frase curta de aviso (até 10 palavras). "
+            "Resposta final em no máximo 2 frases curtas, até 30 palavras. Trate-o por Senhor.]")
+ESPERA_AVISO = 0.3  # só fala "um instante" se o trabalho com ferramenta passar disso
 
 
 class TurnoClaude:
@@ -196,7 +232,12 @@ class TurnoClaude:
         self.entregue = False
         self.avisou = False
         self.ao_avisar = ao_avisar
+        self.agendado = False
         self.trava = threading.Lock()
+        self.marcas = {"envio": time.time()}  # tempos de cada etapa, pro log
+
+    def marcar(self, nome):
+        self.marcas.setdefault(nome, round(time.time() - self.marcas["envio"], 2))
 
     def entregar(self, resultado):
         if not self.entregue:
@@ -210,6 +251,16 @@ class TurnoClaude:
                 return
             self.avisou = True
         self.ao_avisar(frase)
+
+    def pedir_aviso(self, frase=None):
+        """Ele começou a usar ferramenta: se a resposta não sair em ESPERA_AVISO s, avisa."""
+        with self.trava:
+            if self.avisou or self.agendado:
+                return
+            self.agendado = True
+        relogio = threading.Timer(ESPERA_AVISO, self.avisar, args=(frase,))
+        relogio.daemon = True
+        relogio.start()
 
 
 class SessaoClaude:
@@ -235,8 +286,10 @@ class SessaoClaude:
             "--include-partial-messages",  # avisa o fim do texto antes de fechar a rodada
             "--permission-mode", "bypassPermissions",
             "--settings", json.dumps(ajustes),
-            "--append-system-prompt", persona(),
+            "--append-system-prompt", persona() + self.nota_pasta(),
         ]
+        if CFG["contexto"] == "leve":
+            cmd += ["--add-dir", str(CFG["pasta"])]
         if CFG["modelo"]:
             cmd += ["--model", CFG["modelo"]]
         if CFG["esforco"]:
@@ -245,6 +298,31 @@ class SessaoClaude:
             cmd += ["--disallowedTools", CFG["bloquear"]]
         return cmd
 
+    def nota_pasta(self):
+        return (f"\n\n## Pasta de trabalho\nA pasta de trabalho dele é `{CFG['pasta']}`. Caminhos relativos citados "
+                "acima ficam dentro dela. Antes de criar ou mudar algo lá, leia o CLAUDE.md dela (só a parte que interessa).")
+
+    def pasta_de_abertura(self):
+        if CFG["contexto"] == "leve":
+            leve = RAIZ / "cerebro"  # pasta vazia: o Claude não carrega o CLAUDE.md nem a memória da sua pasta
+            leve.mkdir(exist_ok=True)
+            return str(leve)
+        return str(CFG["pasta"])
+
+    def interromper(self):
+        """Barra de espaço no meio do trabalho: o Claude para na hora e a conversa continua."""
+        turno = self.turno
+        if not self.vivo() or not turno or turno.entregue:
+            return False
+        try:
+            msg = {"type": "control_request", "request_id": uuid.uuid4().hex[:8], "request": {"subtype": "interrupt"}}
+            self.proc.stdin.write(json.dumps(msg) + "\n")
+            self.proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            pass
+        turno.entregar({"result": "", "interrompido": True})
+        return True
+
     def iniciar(self):
         ESTADO.mkdir(exist_ok=True)
         env = os.environ.copy()
@@ -252,7 +330,7 @@ class SessaoClaude:
         env["JARVIS_PASTA"] = str(CFG["pasta"])
         self.livre.set()
         self.proc = subprocess.Popen(
-            self.comando(), cwd=str(CFG["pasta"]), env=env,
+            self.comando(), cwd=self.pasta_de_abertura(), env=env,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1, encoding="utf-8",
         )
@@ -292,6 +370,8 @@ class SessaoClaude:
                 ev = e.get("event") or {}
                 if ev.get("type") == "message_start":
                     texto_msg = ""
+                    if turno:
+                        turno.marcar("1a_mensagem_s")
                 elif ev.get("type") == "message_delta" and (ev.get("delta") or {}).get("stop_reason") == "end_turn":
                     # Resposta final pronta: entrega já, sem esperar o Claude fechar a rodada.
                     if turno and texto_msg.strip():
@@ -301,10 +381,12 @@ class SessaoClaude:
                     if bloco.get("type") == "text":
                         texto_msg = (texto_msg + " " + bloco.get("text", "")).strip()
                     elif bloco.get("type") == "tool_use":
+                        if turno:
+                            turno.marcar("ferramenta_s")
                         # Texto escrito antes da primeira ferramenta = aviso rápido ("Um instante, Senhor.").
                         # Se ele foi direto pra ferramenta, toca uma frase pronta.
                         if turno:
-                            turno.avisar(texto_msg or None)
+                            turno.pedir_aviso(texto_msg or None)
                         texto_msg = ""
                         rot = rotulo_ferramenta(bloco.get("name", ""), bloco.get("input"))
                         resumo = json.dumps(bloco.get("input") or {}, ensure_ascii=False)[:160]
@@ -326,29 +408,29 @@ class SessaoClaude:
                 f.write(linha)
                 f.flush()
 
-    def perguntar(self, texto, limite=300, ao_avisar=None):
+    def perguntar(self, texto, limite=300, ao_avisar=None, aviso_apos=None):
         with self.lock:
             if not self.vivo():
                 self.iniciar()
+            espera = time.time()
             self.livre.wait(timeout=20)  # espera o Claude fechar a rodada anterior
             turno = TurnoClaude(ao_avisar)
+            turno.marcas["esperou_rodada_s"] = round(time.time() - espera, 2)
             self.turno = turno
             self.livre.clear()
             self.ferramentas_turno = []
             msg = {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": texto + LEMBRETE}]}}
             self.proc.stdin.write(json.dumps(msg, ensure_ascii=False) + "\n")
             self.proc.stdin.flush()
-            # Se em 2,5 s não veio nem aviso nem resposta, fala uma frase pronta.
-            relogio = threading.Timer(2.5, turno.avisar)
-            relogio.daemon = True
-            relogio.start()
+            if aviso_apos:  # pergunta de dado: se demorar, fala "Um instante, Senhor."
+                relogio = threading.Timer(aviso_apos, turno.avisar)
+                relogio.daemon = True
+                relogio.start()
             try:
                 return turno.fila.get(timeout=limite)
             except queue.Empty:
                 self.parar()
                 return {"is_error": True, "result": "Senhor, demorei demais e reiniciei a conversa. Pode repetir?"}
-            finally:
-                relogio.cancel()
 
 
 SESSAO = SessaoClaude()
@@ -386,7 +468,7 @@ def transcrever_whisper(audio, mime):
     wav = para_wav(audio, mime)
     corpo, tipo = multipart({"response_format": "json", "temperature": "0.0"}, "fala.wav", wav, "audio/wav")
     req = urllib.request.Request(CFG["whisper_url"] + "/inference", data=corpo, headers={"Content-Type": tipo})
-    with urllib.request.urlopen(req, timeout=60) as r:
+    with urllib.request.urlopen(req, timeout=25) as r:  # passou disso, usa o ElevenLabs
         return json.loads(r.read().decode("utf-8")).get("text", "")
 
 
@@ -468,19 +550,28 @@ class Fala:
 
     todas = {}
 
-    def __init__(self, texto):
+    def __init__(self, texto, voz=None, velocidade=None):
         self.pedacos = bytearray()
         self.pronto = False
         self.erro = None
         self.cond = threading.Condition()
+        self.voz = voz or CFG["voz"]
+        self.velocidade = velocidade if velocidade is not None else CFG["velocidade_voz"]
         threading.Thread(target=self._gerar, args=(texto,), daemon=True).start()
 
+    def esperar(self, limite=60):
+        with self.cond:
+            fim = time.time() + limite
+            while not self.pronto and time.time() < fim:
+                self.cond.wait(timeout=1)
+        return bytes(self.pedacos) if self.pronto and not self.erro else b""
+
     def _gerar(self, texto):
-        url = (f"https://api.elevenlabs.io/v1/text-to-speech/{CFG['voz']}/stream"
+        url = (f"https://api.elevenlabs.io/v1/text-to-speech/{self.voz}/stream"
                "?output_format=mp3_44100_128")
         pedido = {"text": texto, "model_id": CFG["modelo_voz"]}
-        if CFG["velocidade_voz"] != 1.0:
-            pedido["voice_settings"] = {"speed": CFG["velocidade_voz"]}
+        if self.velocidade != 1.0:
+            pedido["voice_settings"] = {"speed": self.velocidade}
         corpo = json.dumps(pedido).encode()
         req = urllib.request.Request(url, data=corpo, headers={
             "xi-api-key": CFG["eleven_key"], "Content-Type": "application/json"})
@@ -522,7 +613,8 @@ class Fala:
 
     @classmethod
     def fixa(cls, texto):
-        id_fala = "f" + uuid.uuid5(uuid.NAMESPACE_URL, texto).hex[:11]
+        chave = f"{CFG['voz']}|{CFG['velocidade_voz']}|{texto}"
+        id_fala = "f" + uuid.uuid5(uuid.NAMESPACE_URL, chave).hex[:11]
         if id_fala not in cls.fixas:
             cls.fixas[id_fala] = cls(texto)
         return id_fala
@@ -541,13 +633,78 @@ AVISOS_PRONTOS = ["Um instante, Senhor.", "Deixa comigo, Senhor.", "Verificando,
                   "Já volto com isso, Senhor.", "Consultando, Senhor."]
 
 
+# ---------------------------------------------------------------- pré-busca
+# Pergunta que bate com um gatilho de gatilhos.json já sai com o dado buscado:
+# o atalho roda enquanto a pergunta vai pro Claude e ele só precisa falar.
+
+def carregar_gatilhos():
+    try:
+        return json.loads((RAIZ / "gatilhos.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return []
+
+
+GATILHOS = carregar_gatilhos()
+
+
+def periodo_falado(texto):
+    t = " ".join(normalizar(texto))
+    if re.search(r"\b(semana|ultimos dias|7 dias|sete dias)\b", t):
+        return ["--ultimos", "7"]
+    if re.search(r"\b(mes|30 dias|trinta dias)\b", t):
+        return ["--ultimos", "30"]
+    if re.search(r"\bontem\b", t):
+        return ["--dia", "ontem"]
+    return ["--dia", "hoje"]
+
+
+def prebusca(texto):
+    palavras = set(normalizar(texto))
+    comandos = []
+    for g in GATILHOS:
+        alvos = {" ".join(normalizar(p)) for p in g.get("palavras", [])}
+        if palavras & alvos:
+            cmd = [sys.executable, str(RAIZ / "atalhos" / g["comando"][0])] + g["comando"][1:]
+            if g.get("periodo"):
+                cmd += periodo_falado(texto)
+            comandos.append((g["nome"], cmd))
+    if not comandos:
+        return ""
+
+    def rodar(item):
+        nome, cmd = item
+        try:
+            r = subprocess.run(cmd, cwd=str(RAIZ), capture_output=True, text=True, timeout=8)
+            return f"{nome}: {r.stdout.strip()}" if r.returncode == 0 and r.stdout.strip() else ""
+        except Exception:
+            return ""
+
+    with ThreadPoolExecutor(max_workers=len(comandos)) as grupo:
+        linhas = [l for l in grupo.map(rodar, comandos) if l]
+    if not linhas:
+        return ""
+    return ("\n\n[dados que o JARVIS já buscou agora pra esta pergunta. Responda direto com eles, "
+            "sem rodar comando e sem aviso. Só rode algo se faltar o que ele pediu:]\n" + "\n".join(linhas))
+
+
 class Turno:
     ocupado = threading.Lock()
     aguardando_confirmacao = False
+    interrompido = False  # você apertou espaço no meio: esse pedido não fala mais nada
+
+
+def interromper():
+    if not Turno.ocupado.locked():
+        return False
+    Turno.interrompido = True
+    SESSAO.interromper()
+    log({"evento": "interrompido"})
+    return True
 
 
 def processar(audio=None, mime="audio/webm", texto=None):
-    if not Turno.ocupado.acquire(blocking=False):
+    # Se o pedido anterior foi interrompido, ele libera em instantes: espera um pouco.
+    if not Turno.ocupado.acquire(timeout=10 if Turno.interrompido else 0.01):
         EVENTOS.emitir({"tipo": "aviso", "texto": "Ainda estou no pedido anterior, Senhor."})
         return
     token = ESTADO / "confirmado"
@@ -558,6 +715,9 @@ def processar(audio=None, mime="audio/webm", texto=None):
             EVENTOS.emitir({"tipo": "estado", "estado": "transcrevendo"})
             texto = transcrever(audio, mime)
             registro["transcricao_s"] = round(time.time() - inicio, 2)
+            if Turno.interrompido:
+                registro["interrompido"] = True
+                return
         texto = (texto or "").strip()
         if not texto:
             EVENTOS.emitir({"tipo": "aviso", "texto": "Não consegui ouvir. Segure o espaço e fale de novo."})
@@ -577,6 +737,8 @@ def processar(audio=None, mime="audio/webm", texto=None):
 
         def avisar(frase=None):
             # "Um instante, Senhor." sai na hora, enquanto ele trabalha.
+            if Turno.interrompido:
+                return
             frase = limpar_para_fala(frase or "")[:160]
             pronta = not frase
             if pronta:
@@ -587,9 +749,18 @@ def processar(audio=None, mime="audio/webm", texto=None):
                 id_fala = Fala.fixa(frase) if pronta else Fala.criar(frase)
                 EVENTOS.emitir({"tipo": "fala", "texto": frase, "audio": f"/api/voz/{id_fala}"})
 
-        r = SESSAO.perguntar(texto, ao_avisar=avisar)
+        t_busca = time.time()
+        dados = prebusca(texto)
+        if dados:
+            registro["prebusca_s"] = round(time.time() - t_busca, 2)
+        r = SESSAO.perguntar(texto + dados, ao_avisar=avisar, aviso_apos=2.5 if dados else None)
         registro["claude_s"] = round(time.time() - t_claude, 2)
         registro["cedo"] = bool(r.get("cedo"))
+        if SESSAO.turno:
+            registro["etapas"] = {k: v for k, v in SESSAO.turno.marcas.items() if k != "envio"}
+        if Turno.interrompido or r.get("interrompido"):
+            registro["interrompido"] = True
+            return
         registro["ferramentas"] = SESSAO.ferramentas_turno
         resposta = limpar_para_fala(r.get("result") or "") or "Feito."
         if r.get("is_error"):
@@ -612,7 +783,19 @@ def processar(audio=None, mime="audio/webm", texto=None):
         if token.exists():
             token.unlink()
         log(registro)
+        Turno.interrompido = False
         Turno.ocupado.release()
+
+
+def config_atual():
+    return {"voz": CFG["voz"], "velocidade": CFG["velocidade_voz"], "vozes": VOZES}
+
+
+def gravar_avisos_prontos():
+    """Deixa as frases prontas ("Um instante, Senhor.") gravadas na voz escolhida."""
+    if CFG["eleven_key"]:
+        for frase in AVISOS_PRONTOS:
+            Fala.fixa(frase)
 
 
 def aquecer_atalhos():
@@ -633,9 +816,7 @@ def aquecer():
     EVENTOS.emitir({"tipo": "estado", "estado": "aquecendo"})
     try:
         SESSAO.iniciar()
-        if CFG["eleven_key"]:
-            for frase in AVISOS_PRONTOS:  # deixa as frases prontas gravadas
-                Fala.fixa(frase)
+        gravar_avisos_prontos()
         if CFG["aquecer"]:
             with Turno.ocupado:
                 SESSAO.perguntar("(Mensagem automática de início. Não use ferramentas. Responda só: Pronto.)", limite=120)
@@ -665,6 +846,10 @@ class Servidor(BaseHTTPRequestHandler):
         caminho = self.path.split("?")[0]
         if caminho == "/api/eventos":
             return self.eventos()
+        if caminho == "/api/config":
+            return self.responder(200, json.dumps(config_atual(), ensure_ascii=False).encode())
+        if caminho.startswith("/api/amostra/"):
+            return self.amostra(caminho.rsplit("/", 1)[-1])
         if caminho.startswith("/api/voz/"):
             return self.voz(caminho.rsplit("/", 1)[-1])
         if caminho == "/api/saude":
@@ -681,6 +866,10 @@ class Servidor(BaseHTTPRequestHandler):
     def do_POST(self):
         tamanho = int(self.headers.get("Content-Length", "0"))
         corpo = self.rfile.read(tamanho) if tamanho else b""
+        if self.path == "/api/interromper":
+            return self.responder(200, json.dumps({"interrompeu": interromper()}).encode())
+        if self.path in ("/api/audio", "/api/texto") and Turno.ocupado.locked() and not Turno.interrompido:
+            return self.responder(409, b'{"ocupado":true}')  # a tela avisa e espera
         if self.path == "/api/audio":
             if len(corpo) < 2000:  # toque rápido no espaço, sem fala
                 return self.responder(200, b'{"ok":false}')
@@ -699,6 +888,17 @@ class Servidor(BaseHTTPRequestHandler):
             log({"evento": "tela", "tipo": str(dados.get("evento", ""))[:40],
                  "detalhe": str(dados.get("detalhe", ""))[:300]})
             return self.responder(200, b'{"ok":true}')
+        if self.path == "/api/config":
+            pedido = json.loads(corpo or b"{}")
+            ids = {v["id"] for v in VOZES}
+            if pedido.get("voz") in ids:
+                CFG["voz"] = pedido["voz"]
+            if pedido.get("velocidade") is not None:
+                CFG["velocidade_voz"] = round(min(1.2, max(0.7, float(pedido["velocidade"]))), 2)
+            salvar_preferencias()
+            log({"evento": "config", "voz": CFG["voz"], "velocidade": CFG["velocidade_voz"]})
+            threading.Thread(target=gravar_avisos_prontos, daemon=True).start()
+            return self.responder(200, json.dumps(config_atual(), ensure_ascii=False).encode())
         if self.path == "/api/reiniciar":
             SESSAO.parar()
             Turno.aguardando_confirmacao = False
@@ -725,6 +925,18 @@ class Servidor(BaseHTTPRequestHandler):
             pass
         finally:
             EVENTOS.sair(q)
+
+    def amostra(self, voz):
+        if voz not in {v["id"] for v in VOZES} or not CFG["eleven_key"]:
+            return self.responder(404, b"{}")
+        arquivo = ESTADO / "amostras" / f"{voz}-{CFG['velocidade_voz']}.mp3"
+        if not arquivo.exists():
+            dados = Fala(AMOSTRA, voz=voz).esperar()
+            if not dados:
+                return self.responder(502, b"{}")
+            arquivo.parent.mkdir(parents=True, exist_ok=True)
+            arquivo.write_bytes(dados)
+        self.responder(200, arquivo.read_bytes(), "audio/mpeg")
 
     def voz(self, id_fala):
         fala = Fala.todas.get(id_fala) or Fala.fixas.get(id_fala)
