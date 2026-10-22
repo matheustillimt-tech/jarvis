@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JARVIS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --fundo: #000;
+    --texto: #fff;
+    --suave: rgba(255, 255, 255, .58);
+    --fraco: rgba(255, 255, 255, .30);
+    --linha: rgba(255, 255, 255, .20);
+  }
+  html, body {
+    margin: 0; height: 100%; background: var(--fundo); color: var(--texto);
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+    overflow: hidden; -webkit-font-smoothing: antialiased; user-select: none;
+  }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: pointer; }
+
+  .topo {
+    position: fixed; top: 28px; left: 32px; right: 32px; display: flex; justify-content: space-between;
+    align-items: center; font-size: 12px; letter-spacing: .32em; text-transform: uppercase; color: var(--suave);
+    pointer-events: none;
+  }
+  .marca { color: var(--texto); font-weight: 600; }
+  .estado { display: flex; align-items: center; gap: 10px; }
+  .ponto { width: 7px; height: 7px; border-radius: 50%; background: var(--texto); opacity: .35; transition: opacity .3s, box-shadow .3s; }
+  body[data-estado="ouvindo"] .ponto,
+  body[data-estado="falando"] .ponto { opacity: 1; box-shadow: 0 0 14px #fff; }
+  body[data-estado="pensando"] .ponto,
+  body[data-estado="transcrevendo"] .ponto,
+  body[data-estado="aquecendo"] .ponto { animation: pisca 1s ease-in-out infinite; }
+
+  .legenda {
+    position: fixed; left: 50%; bottom: 10vh; transform: translateX(-50%);
+    width: min(980px, calc(100vw - 32px)); text-align: center; pointer-events: none;
+  }
+  .ferramentas { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; min-height: 30px; margin-bottom: 18px; }
+  .chip {
+    font-size: 12px; letter-spacing: .08em; padding: 6px 12px; border: 1px solid var(--linha); border-radius: 999px;
+    background: rgba(255, 255, 255, .04); display: flex; gap: 8px; align-items: center; animation: entra .35s ease both;
+  }
+  .chip i { width: 6px; height: 6px; border-radius: 50%; background: var(--texto); animation: pisca 1s ease-in-out infinite; }
+  .chip.feito { color: var(--suave); }
+  .chip.feito i { animation: none; opacity: .4; }
+  .voce { font-size: 17px; color: var(--suave); min-height: 24px; margin-bottom: 14px; font-weight: 400; }
+  .resposta {
+    font-size: clamp(21px, 2.5vw, 31px); line-height: 1.38; font-weight: 500; min-height: 44px; text-wrap: balance;
+  }
+  .tempo { margin-top: 14px; font-size: 11px; letter-spacing: .2em; text-transform: uppercase; color: var(--fraco); min-height: 14px; }
+  .aviso { margin-top: 10px; font-size: 14px; color: var(--suave); min-height: 18px; }
+
+  .dica {
+    position: fixed; bottom: 22px; left: 16px; right: 16px; text-align: center; font-size: 11px;
+    letter-spacing: .24em; text-transform: uppercase; color: var(--fraco); pointer-events: none;
+  }
+  .dica b { color: var(--suave); font-weight: 500; }
+  /* Tela limpa: só a esfera. H mostra os detalhes (pra testar). */
+  .topo, .ferramentas, .voce, .resposta, .tempo { display: none; }
+  body.detalhes .topo, body.detalhes .ferramentas { display: flex; }
+  body.detalhes .voce, body.detalhes .resposta, body.detalhes .tempo { display: block; }
+  .dica { transition: opacity 1.2s; }
+  body.usado .dica { opacity: 0; }
+  body.detalhes .dica { opacity: 1; }
+
+  #caixa { position: fixed; top: 76px; left: 50%; transform: translateX(-50%); width: min(640px, calc(100vw - 32px)); display: none; }
+  #caixa input {
+    width: 100%; box-sizing: border-box; background: rgba(255, 255, 255, .06); border: 1px solid var(--linha);
+    border-radius: 12px; color: var(--texto); font: inherit; font-size: 16px; padding: 14px 16px; outline: none;
+  }
+  body.digitando #caixa { display: block; }
+
+  @keyframes pisca { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+  @keyframes entra { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @media (max-width: 600px) {
+    .topo { left: 16px; right: 16px; top: 18px; letter-spacing: .22em; }
+    .topo .atalhos { display: none; }
+  }
+</style>
+</head>
+<body data-estado="iniciando">
+<canvas id="esfera" aria-label="Esfera do JARVIS. Segure para falar."></canvas>
+
+<div class="topo">
+  <span class="marca">Jarvis</span>
+  <span class="estado"><span class="ponto"></span><span id="estadoTexto">iniciando</span></span>
+</div>
+
+<div id="caixa"><input id="entrada" type="text" placeholder="Digite e aperte Enter" autocomplete="off"></div>
+
+<div class="legenda">
+  <div class="ferramentas" id="ferramentas"></div>
+  <div class="voce" id="voce"></div>
+  <div class="resposta" id="resposta"></div>
+  <div class="tempo" id="tempo"></div>
+  <div class="aviso" id="aviso"></div>
+</div>
+
+<div class="dica" id="dica">Segure <b>espaço</b> pra falar · <b>T</b> digitar · <b>N</b> nova conversa · <b>H</b> detalhes</div>
+
+<script>
+(() => {
+  const NOMES = {
+    iniciando: "iniciando", aquecendo: "conectando", parado: "pronto", ouvindo: "ouvindo",
+    transcrevendo: "entendendo", pensando: "trabalhando", falando: "falando",
+  };
+  const el = (id) => document.getElementById(id);
+  const corpo = document.body;
+  let estado = "iniciando";
+
+  function mudarEstado(novo) {
+    estado = novo;
+    corpo.dataset.estado = novo;
+    el("estadoTexto").textContent = NOMES[novo] || novo;
+  }
+
+  // ---------------------------------------------------------- esfera
+  const tela = el("esfera");
+  const ctx = tela.getContext("2d");
+  let W = 0, H = 0;
+  function medir() {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    W = innerWidth; H = innerHeight;
+    tela.width = W * dpr; tela.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  addEventListener("resize", medir);
+  medir();
+
+  const N = 2400;
+  const pontos = [];
+  for (let i = 0; i < N; i++) {
+    const y = 1 - (i / (N - 1)) * 2;
+    const r = Math.sqrt(1 - y * y);
+    const th = i * 2.399963229728653;
+    pontos.push([Math.cos(th) * r, y, Math.sin(th) * r, Math.random() * Math.PI * 2]);
+  }
+
+  let audioCtx = null, analisadorMic = null, analisadorSaida = null;
+  const amostras = new Uint8Array(1024);
+  function volume(analisador) {
+    if (!analisador) return 0;
+    analisador.getByteTimeDomainData(amostras);
+    let soma = 0;
+    for (let i = 0; i < amostras.length; i++) { const x = (amostras[i] - 128) / 128; soma += x * x; }
+    return Math.min(1, Math.sqrt(soma / amostras.length) * 4.5);
+  }
+
+  let nivel = 0, rot = 0, veloc = 0.002;
+  const t0 = performance.now();
+  const trabalhando = () => ["pensando", "transcrevendo", "aquecendo", "iniciando"].includes(estado);
+
+  function quadro(agora) {
+    const t = (agora - t0) / 1000;
+    let alvo;
+    if (estado === "ouvindo") alvo = volume(analisadorMic);
+    else if (estado === "falando") alvo = volume(analisadorSaida);
+    else if (trabalhando()) alvo = 0.16 + 0.1 * Math.sin(t * 3.4);
+    else alvo = 0.04 + 0.03 * Math.sin(t * 1.2);
+    nivel += (alvo - nivel) * 0.2;
+
+    const vAlvo = trabalhando() ? 0.014 : estado === "falando" ? 0.006 : 0.0024;
+    veloc += (vAlvo - veloc) * 0.04;
+    rot += veloc;
+
+    ctx.clearRect(0, 0, W, H);
+    const cx = W / 2, cy = H * 0.42;
+    const R = Math.min(W, H) * 0.2 * (1 + nivel * 0.3);
+
+    const brilho = ctx.createRadialGradient(cx, cy, R * 0.05, cx, cy, R * 2.1);
+    brilho.addColorStop(0, `rgba(255,255,255,${0.09 + nivel * 0.22})`);
+    brilho.addColorStop(0.4, `rgba(255,255,255,${0.025 + nivel * 0.05})`);
+    brilho.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = brilho;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.fillStyle = "#fff";
+    const cr = Math.cos(rot), sr = Math.sin(rot);
+    const inc = 0.42, ci = Math.cos(inc), si = Math.sin(inc);
+    const forca = estado === "falando" || estado === "ouvindo" ? 0.6 : 0.35;
+    for (let i = 0; i < N; i++) {
+      const p = pontos[i];
+      const onda = 1 + nivel * forca * Math.sin(p[3] + t * 6 + p[1] * 5);
+      const x = p[0] * onda, y = p[1] * onda, z = p[2] * onda;
+      const x1 = x * cr + z * sr, z1 = -x * sr + z * cr;
+      const y1 = y * ci - z1 * si, z2 = y * si + z1 * ci;
+      const prof = (z2 + 1.3) / 2.6;
+      const esc = 1.4 / (1.9 - z2 * 0.5);
+      const tam = (0.55 + 1.35 * prof) * (1 + nivel * 0.35);
+      ctx.globalAlpha = Math.max(0.04, Math.min(1, 0.06 + 0.9 * prof * prof));
+      ctx.fillRect(cx + x1 * R * esc - tam / 2, cy + y1 * R * esc - tam / 2, tam, tam);
+    }
+    ctx.globalAlpha = 1;
+    requestAnimationFrame(quadro);
+  }
+  requestAnimationFrame(quadro);
+
+  // ---------------------------------------------------------- áudio
+  // A voz toca pelo Web Audio (baixa inteira e decodifica). O <audio> do WebKit,
+  // usado pelo app de Mac e pelo Safari, não toca áudio que chega aos pedaços.
+  let falaAtual = null;
+
+  function diag(evento, detalhe) {
+    fetch("/api/diag", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ evento, detalhe: String(detalhe || "") }),
+    }).catch(() => {});
+  }
+
+  async function prepararAudio() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") {
+      // resume() pode ficar pendente se o navegador ainda não deixou tocar som
+      await Promise.race([audioCtx.resume().catch(() => {}), new Promise((ok) => setTimeout(ok, 600))]);
+    }
+    if (!analisadorSaida) {
+      analisadorSaida = audioCtx.createAnalyser();
+      analisadorSaida.fftSize = 1024;
+      analisadorSaida.connect(audioCtx.destination);
+    }
+  }
+  // Qualquer toque ou tecla destrava o som do navegador.
+  addEventListener("pointerdown", () => { prepararAudio(); }, { capture: true });
+  addEventListener("keydown", () => { prepararAudio(); }, { capture: true });
+
+  function decodificar(dados) {
+    return new Promise((ok, falha) => {
+      const r = audioCtx.decodeAudioData(dados, ok, falha);
+      if (r && r.then) r.then(ok, falha);
+    });
+  }
+
+  // Fila de falas: o aviso rápido ("Um instante, Senhor.") e depois a resposta.
+  let fila = [], tocando = false, turnoAberto = false;
+
+  function pararFala() {
+    fila = [];
+    tocando = false;
+    if (falaAtual) {
+      const f = falaAtual;
+      falaAtual = null;
+      try { f.onended = null; f.stop(); } catch (e) {}
+    }
+  }
+
+  async function baixar(url) {
+    await prepararAudio();
+    const resposta = await fetch(url);
+    if (!resposta.ok) throw new Error("servidor da voz respondeu " + resposta.status);
+    return decodificar(await resposta.arrayBuffer());
+  }
+
+  function falar(url) {
+    if (!url) {
+      if (!tocando) mudarEstado(turnoAberto ? "pensando" : "parado");
+      return;
+    }
+    const pendente = baixar(url);  // já baixa enquanto a fala anterior toca
+    pendente.catch(() => {});
+    fila.push(pendente);
+    if (!tocando) proxima();
+  }
+
+  async function proxima() {
+    const pendente = fila.shift();
+    if (!pendente) {
+      tocando = false;
+      mudarEstado(turnoAberto ? "pensando" : "parado");
+      return;
+    }
+    tocando = true;
+    try {
+      const buffer = await pendente;
+      if (!tocando) return;  // cancelada (você começou a falar)
+      if (audioCtx.state !== "running") {
+        throw new Error("som bloqueado pelo navegador (estado " + audioCtx.state + ")");
+      }
+      const fonte = audioCtx.createBufferSource();
+      fonte.buffer = buffer;
+      fonte.connect(analisadorSaida);
+      fonte.onended = () => {
+        if (falaAtual === fonte) {
+          falaAtual = null;
+          proxima();
+        }
+      };
+      falaAtual = fonte;
+      mudarEstado("falando");
+      fonte.start();
+      diag("voz_tocou", buffer.duration.toFixed(1) + " s");
+    } catch (erro) {
+      diag("voz_falhou", erro && erro.message ? erro.message : erro);
+      avisar("Não consegui tocar a voz. Clique na janela e tente de novo.");
+      proxima();
+    }
+  }
+
+  let micStream = null, gravador = null, pedacos = [], gravando = false, inicioGravacao = 0;
+  let picoGravacao = 0, medidor = null;
+
+  async function comecarGravacao() {
+    if (gravando || trabalhando()) return;
+    corpo.classList.add("usado");
+    try {
+      await prepararAudio();
+      if (!micStream) {
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        analisadorMic = audioCtx.createAnalyser();
+        analisadorMic.fftSize = 1024;
+        audioCtx.createMediaStreamSource(micStream).connect(analisadorMic);
+      }
+    } catch (erro) {
+      avisar("Sem acesso ao microfone. Libere no navegador ou aperte T pra digitar.");
+      return;
+    }
+    pararFala();
+    pedacos = [];
+    picoGravacao = 0;
+    clearInterval(medidor);
+    medidor = setInterval(() => { picoGravacao = Math.max(picoGravacao, volume(analisadorMic)); }, 50);
+    const tipos = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"];
+    const tipo = tipos.find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
+    gravador = new MediaRecorder(micStream, tipo ? { mimeType: tipo } : undefined);
+    gravador.ondataavailable = (e) => { if (e.data && e.data.size) pedacos.push(e.data); };
+    gravador.onstop = enviarGravacao;
+    gravador.start();
+    gravando = true;
+    inicioGravacao = performance.now();
+    mudarEstado("ouvindo");
+  }
+
+  function pararGravacao() {
+    if (!gravando) return;
+    gravando = false;
+    clearInterval(medidor);
+    gravador.stop();
+  }
+
+  async function enviarGravacao() {
+    const curta = performance.now() - inicioGravacao < 350;
+    const blob = new Blob(pedacos, { type: (gravador && gravador.mimeType) || "audio/webm" });
+    if (curta || blob.size < 2000) { mudarEstado("parado"); return; }
+    if (picoGravacao < 0.06) {  // só silêncio: o whisper inventa frase ("Legenda por...")
+      avisar("Não ouvi nada. Segure o espaço e fale mais perto do microfone.");
+      diag("silencio", "pico " + picoGravacao.toFixed(3));
+      mudarEstado("parado");
+      return;
+    }
+    diag("gravacao", "pico " + picoGravacao.toFixed(3));  // pra calibrar o limite de silêncio
+    novoTurno();
+    mudarEstado("transcrevendo");
+    try {
+      await fetch("/api/audio", { method: "POST", headers: { "Content-Type": blob.type }, body: blob });
+    } catch (erro) {
+      avisar("Não consegui falar com o servidor.");
+      mudarEstado("parado");
+    }
+  }
+
+  async function enviarTexto(texto) {
+    if (!texto.trim() || trabalhando()) return;
+    corpo.classList.add("usado");
+    await prepararAudio();
+    novoTurno();
+    el("voce").textContent = "“" + texto + "”";
+    mudarEstado("pensando");
+    await fetch("/api/texto", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ texto }),
+    });
+  }
+
+  // ---------------------------------------------------------- tela
+  let rotulosTurno = new Set();
+  let avisoTimer = null;
+
+  function novoTurno() {
+    turnoAberto = true;
+    rotulosTurno = new Set();
+    el("ferramentas").innerHTML = "";
+    el("voce").textContent = "";
+    el("resposta").textContent = "";
+    el("tempo").textContent = "";
+    el("aviso").textContent = "";
+  }
+
+  function chip(rotulo) {
+    if (rotulosTurno.has(rotulo)) return;
+    rotulosTurno.add(rotulo);
+    const c = document.createElement("span");
+    c.className = "chip";
+    c.innerHTML = "<i></i>";
+    c.appendChild(document.createTextNode(rotulo));
+    el("ferramentas").appendChild(c);
+  }
+
+  function avisar(texto) {
+    el("aviso").textContent = texto;
+    clearTimeout(avisoTimer);
+    avisoTimer = setTimeout(() => { el("aviso").textContent = ""; }, 6000);
+  }
+
+  function conectar() {
+    const fonte = new EventSource("/api/eventos");
+    fonte.onmessage = (ev) => {
+      const e = JSON.parse(ev.data);
+      if (e.tipo === "estado") {
+        if (tocando && e.estado !== "aquecendo") return;  // deixa a fala terminar
+        if (e.estado === "parado" && estado === "ouvindo") return;
+        if (estado === "ouvindo" && e.estado !== "aquecendo") return;
+        mudarEstado(e.estado);
+      } else if (e.tipo === "voce") {
+        turnoAberto = true;
+        el("voce").textContent = "“" + e.texto + "”";
+      } else if (e.tipo === "ferramenta") {
+        chip(e.rotulo);
+      } else if (e.tipo === "fala") {
+        falar(e.audio);  // aviso rápido, o trabalho continua
+      } else if (e.tipo === "resposta") {
+        turnoAberto = false;
+        document.querySelectorAll(".chip").forEach((c) => c.classList.add("feito"));
+        el("resposta").textContent = e.texto;
+        el("tempo").textContent = "respondeu em " + String(e.segundos).replace(".", ",") + " s";
+        falar(e.audio);
+      } else if (e.tipo === "aviso") {
+        avisar(e.texto);
+      }
+    };
+    fonte.onerror = () => { mudarEstado("iniciando"); };
+  }
+  conectar();
+
+  // ---------------------------------------------------------- atalhos
+  const digitando = () => corpo.classList.contains("digitando");
+
+  addEventListener("keydown", (e) => {
+    if (digitando()) {
+      if (e.key === "Escape") { corpo.classList.remove("digitando"); el("entrada").blur(); }
+      return;
+    }
+    if (e.code === "Space") { e.preventDefault(); if (!e.repeat) comecarGravacao(); return; }
+    const k = e.key.toLowerCase();
+    if (k === "t") { e.preventDefault(); corpo.classList.add("digitando"); el("entrada").focus(); }
+    if (k === "h") corpo.classList.toggle("detalhes");
+    if (k === "n") { novoTurno(); fetch("/api/reiniciar", { method: "POST" }); avisar("Conversa nova."); }
+  });
+  addEventListener("keyup", (e) => { if (e.code === "Space" && !digitando()) { e.preventDefault(); pararGravacao(); } });
+
+  el("entrada").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      const texto = el("entrada").value;
+      el("entrada").value = "";
+      corpo.classList.remove("digitando");
+      el("entrada").blur();
+      enviarTexto(texto);
+    }
+  });
+
+  tela.addEventListener("pointerdown", (e) => { e.preventDefault(); comecarGravacao(); });
+  addEventListener("pointerup", pararGravacao);
+  addEventListener("pointercancel", pararGravacao);
+})();
+</script>
+</body>
+</html>
