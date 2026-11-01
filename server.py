@@ -286,7 +286,6 @@ class SessaoClaude:
             "--include-partial-messages",  # avisa o fim do texto antes de fechar a rodada
             "--permission-mode", "bypassPermissions",
             "--settings", json.dumps(ajustes),
-            "--append-system-prompt", persona() + self.nota_pasta(),
         ]
         if CFG["contexto"] == "leve":
             cmd += ["--add-dir", str(CFG["pasta"])]
@@ -296,6 +295,12 @@ class SessaoClaude:
             cmd += ["--effort", CFG["esforco"]]
         if CFG["bloquear"]:
             cmd += ["--disallowedTools", CFG["bloquear"]]
+        # A persona vai por último de propósito. No Windows o `claude` do PATH é um
+        # claude.CMD, então os argumentos passam pelo cmd.exe, e um valor longo com
+        # aspas e quebras de linha engole as flags que vierem depois dele: --add-dir,
+        # --model e --effort não chegavam, e o Claude caía no model do settings.json.
+        # Não acrescente nada ao cmd depois desta linha.
+        cmd += ["--append-system-prompt", persona() + self.nota_pasta()]
         return cmd
 
     def nota_pasta(self):
